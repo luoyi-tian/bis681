@@ -17,7 +17,6 @@ Vaccine deployment in Connecticut began on December 14th, 2020 with residents of
 A data file `covid19_ct.csv` in this repository contains the data you'll need for this project. 
 
 
-
 ### COVID-19 cases
 
 `The `cases` column shows the daily number of reported COVID-19 cases in Connecticut. A "case" is a positive test for a person whose identity is known, and who has not recently been counted as a case. 
@@ -31,34 +30,36 @@ It is also important to understand that testing in Connecticut dramatically incr
 
 ### COVID-19 Deaths
 
-The `deaths` column. 
+The `deaths` column shows counts of deaths for which COVID-19 is listed on the death certificate. While some early deaths may have been difficult to confirm due to scarcity of diagnostic tests, death counts are likely to be much more reliable than case counts throughout the pandemic. 
 
 ![](img/deaths.png)
 
 ### Vaccination
 
-The `vaccinated` column shows the percent of the CT population that has received at least one vaccination dose. The state did not properly track early vaccinations (which took place starting in December of 2020, so the estimates begin at around 20%. Furthermore the vaccination percentage climbs to more than 100%, presumably because the number vaccinated exceeds the population of the state estimated in the last U.S. Census.  
+The `vaccinated` column shows the percent of the CT population that has received at least one vaccination dose. The state did not properly track early vaccinations (which took place starting in December of 2020), so the estimates begin at around 20%. Furthermore the vaccination percentage is not monotonic and climbs to more than 100%, presumably because the number vaccinated exceeds the population of the state estimated in the last U.S. Census.  
 
 ![](img/vaccinated.png)
 
 
-## Questions for the project team
+## Instructions
 
-Compute the "case-fatality ratio" by week. The case-fatality ratio is the number of deaths divided by the number of cases. Plot the time series and explain what you see. 
+Your overall task is to explain what happened in Connecticut during the first 2 years of the COVID-19 pandemic. 
+- Did the actions of the Governor, including the "stay-at-home" order, school closures, and reopening, affect cases and deaths? 
+- How were interventions (vaccinations) and outcomes (cases and deaths) measured, and what is the meaning of data artifacts such as day-of-week patterns and proportions that exceed 100%? 
+- What was the effect of the vaccination rollout on cases and deaths? 
 
-Estimate the effect of vaccination coverage on cases and deaths
-
-
-Use the dates of the Governor's actions (listed in the Background section) to study the their effects on cases and deaths. 
-
+Specific tasks: 
+- Compute the "case-fatality ratio" by week. The case-fatality ratio is the number of deaths divided by the number of cases. Plot the time series and explain what you see. 
+- Construct and fit a statistical model to estimate the effect of cumulative vaccine coverage on cases, deaths, and the case-fatality rate. Describe the quantity you are estimating, its units, and quantify your uncertainty in the estimate. Explain why this estimate might or might not measure the effect you are interested in. 
+- Use the dates of the Governor's actions (listed in the Background section) to study the their effects on cases and deaths. Formulate and fit a statistical model to do this, and explain what you're measuring. Estimate uncertainty. 
 
 ## References
 
 Some references you may find helpful: 
 
-- O Morozova, Z Li, F W Crawford, One year of modeling COVID-19 transmission to support policymakers in Connecticut (2021) Scientific Reports, 11 20271
-- F W Crawford, S Jones, M Cartter, S G Dean, J L Warren, Zehang Li, J Barbieri, J Campbell, P Kenney, T Valleau, O Morozova, Impact of close interpersonal contact on COVID-19 incidence: evidence from one year of mobile device data (2022) Science Advances, 8 
-- O Schultes, V Clarke, A D Paltiel, M Cartter, L Sosa, F W Crawford, COVID-19 Testing and Case Rates and Social Contact Among Residential College Students in Connecticut During the 2020-2021 Academic Year (2021) JAMA Network Open, 12 e2140602 
+- O Morozova, Z Li, F W Crawford. One year of modeling COVID-19 transmission to support policymakers in Connecticut (2021) Scientific Reports, 11 20271
+- F W Crawford, S Jones, M Cartter, S G Dean, J L Warren, Zehang Li, J Barbieri, J Campbell, P Kenney, T Valleau, O Morozova. Impact of close interpersonal contact on COVID-19 incidence: evidence from one year of mobile device data (2022) Science Advances, 8 
+- O Schultes, V Clarke, A D Paltiel, M Cartter, L Sosa, F W Crawford. COVID-19 Testing and Case Rates and Social Contact Among Residential College Students in Connecticut During the 2020-2021 Academic Year (2021) JAMA Network Open, 12 e2140602 
 
 
 
