@@ -3,9 +3,9 @@
 
 
 
-!(img/cases.png)
-!(img/deaths.png)
-!(img/vaccinated.png)
+![](img/cases.png)
+![](img/deaths.png)
+![](img/vaccinated.png)
 
 
 
