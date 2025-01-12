@@ -33,7 +33,7 @@ ggsave(p1, filename="img/cases.png")
 p2 = ggplot(dat, aes(x=date, y=deaths)) + geom_line()
 ggsave(p2, filename="img/deaths.png")
 
-p3 = ggplot(dat, aes(x=date, y=vaccinated)) + geom_point()
+p3 = ggplot(dat, aes(x=date, y=vaccinated)) + geom_point() + ylim(0,NA)
 ggsave(p3, filename="img/vaccinated.png")
 
 
