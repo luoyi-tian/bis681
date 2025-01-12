@@ -1,4 +1,4 @@
-# BIS 681 Capstone Project
+# BIS 681 Capstone Project: COVID-19 in Connecticut
 
 
 ## Background
@@ -36,7 +36,7 @@ The `deaths` column shows counts of deaths for which COVID-19 is listed on the d
 
 ### Vaccination
 
-The `vaccinated` column shows the percent of the CT population that has received at least one vaccination dose. The state did not properly track early vaccinations (which took place starting in December of 2020), so the estimates begin at around 20%. Furthermore the vaccination percentage is not monotonic and climbs to more than 100%, presumably because the number vaccinated exceeds the population of the state estimated in the last U.S. Census. Alternatively, the state may have erroneously counted second or booster vaccinations of the same person as vaccinations of distinct people, thereby overcounting the number of vaccinated CT residents. 
+The `vaccinated` column shows the percent of the CT population that has received at least one vaccination dose. The state did not properly track early vaccinations (which took place starting in December of 2020), so the estimates begin at around 20%. Furthermore the vaccination percentage is not monotonic and climbs to more than 100%, presumably because the number vaccinated exceeds the population of the state estimated in the last U.S. Census. Alternatively, the state may have erroneously counted second or booster vaccinations of the same person as vaccinations of distinct people, thereby over-counting the number of vaccinated CT residents. 
 
 ![](img/vaccinated.png)
 
