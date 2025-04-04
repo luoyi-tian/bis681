@@ -1,0 +1,749 @@
+---
+title: "Hypothesis2 analysis"
+author: "Shangyun Zhangliang"
+date: "2025-04-04"
+output: html_document
+---
+
+```{R setup, include=FALSE,warning=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE,message=FALSE}
+setwd("C:/Users/zlsha/Desktop/681capston project")
+
+rm(list=ls())
+library(tidyverse)
+library(lubridate)
+library(zoo) 
+library(sandwich)
+library(lmtest)
+library(dynlm)
+
+```
+
+
+```{R}
+# 2. Read in data
+###############################################################################
+covid_data <- read.csv("covid19_ct.csv", stringsAsFactors = FALSE)
+
+# Ensure the 'date' column is properly converted to Date class.
+# Adjust the format string to match your data if needed.
+covid_data$date <- as.Date(covid_data$date, format = "%Y-%m-%d")
+
+str(covid_data)
+```
+```{R}
+covid_data <- covid_data %>%
+  arrange(date) %>%
+  mutate(
+    cases_7d  = rollsum(cases,  k = 7, align = "right", fill = NA),
+    deaths_7d = rollsum(deaths, k = 7, align = "right", fill = NA)
+  )
+
+###############################################################################
+weekly_data <- covid_data %>%
+  filter(!is.na(vaccinated))
+
+
+head(weekly_data)
+```
+
+
+```{R}
+# Potentially rename columns more explicitly:
+# weekly_data <- weekly_data %>%
+#   rename(
+#     weekly_cases   = cases_7d,
+#     weekly_deaths  = deaths_7d,
+#     coverage       = vaccinated
+#   )
+
+plot(weekly_data$date, weekly_data$cases_7d, type = "b",
+     main = "7-day Summed Cases (on Vaccination Coverage Dates)",
+     xlab = "Date (Coverage recorded)",
+     ylab = "7-day sum of cases")
+
+plot(weekly_data$date, weekly_data$deaths_7d, type = "b",
+     main = "7-day Summed Deaths (on Vaccination Coverage Dates)",
+     xlab = "Date (Coverage recorded)",
+     ylab = "7-day sum of deaths")
+
+plot(weekly_data$date, weekly_data$vaccinated, type = "b",
+     main = "Vaccination Coverage (Recorded Dates)",
+     xlab = "Date (Coverage recorded)",
+     ylab = "Vaccinated %")
+```
+
+**address the issue of vaccination above 100%**
+```{R}
+weekly_data <- weekly_data %>%
+  mutate(
+    vaccinated_capped = ifelse(vaccinated > 100, 100, vaccinated)
+  )
+
+```
+
+Compute CFR (Case Fatality Ratio)
+The simplest approach is:CFR = deaths_7d / cases_7d
+**But deaths typically lag cases by 1-2 weeks.**
+**so in here, i used a 1-week lag**
+```{R}
+# Let's shift 'deaths_7d' by 1 row to match it with the *previous* week's cases.
+weekly_data <- weekly_data %>%
+  arrange(date) %>%
+  mutate(deaths_7d_lag1 = lag(deaths_7d, n = 1))  # shift up by 1 time point
+
+# Then define CFR with that lag:
+weekly_data <- weekly_data %>%
+  mutate(CFR_lag1 = deaths_7d_lag1 / cases_7d)
+
+# Inspect:
+head(select(weekly_data, date, cases_7d, deaths_7d, deaths_7d_lag1, CFR_lag1))
+
+# Plot CFR over time (just be mindful of NAs in earliest rows if lag > 0)
+ggplot(weekly_data, aes(x = as.Date(date), y = CFR_lag1)) +
+  geom_line() +
+  labs(title = "Case Fatality Ratio (1-week lag) Over Time",
+       x = "Date",
+       y = "CFR (Deaths_lag1 / Cases)")
+```
+
+# MODELS
+
+**time index**
+- Including a time trend often helps control for changes in the epidemic unrelated to vaccination (seasonality, new variants, etc.).
+
+- You can use a simple linear term (e.g., week_index), polynomials, or splines (e.g., ns(week_index, df=4)) for a more flexible, smooth tren
+```{R}
+
+weekly_data <- weekly_data %>%
+  mutate(week_index = row_number())
+
+```
+
+
+## ModelA
+
+```{R, warning=FALSE,message=FALSE}
+library(MASS)       # for glm.nb (Negative Binomial)
+library(ggplot2)
+library(splines)
+library(AER)
+```
+
+- All these test suggest that Poisson doesn't fit, use negative binomial
+```{R}
+# Fit Poisson
+mod_poisson <- glm(cases_7d ~ vaccinated_capped + ns(week_index, df=4), 
+                   family = "poisson", data = weekly_data)
+
+# Fit Negative Binomial
+mod_nb <- glm.nb(cases_7d ~ vaccinated_capped + ns(week_index, df=4),
+                 data = weekly_data)
+
+# Compare AIC
+#AIC(mod_poisson, mod_nb)
+ 
+#summary(mod_poisson)
+
+# Extract residual deviance and degrees of freedom
+res_dev <- mod_poisson$deviance
+df_res  <- mod_poisson$df.residual
+ratio   <- res_dev / df_res
+#ratio
+
+#dispersiontest(mod_poisson)
+
+```
+
+
+```{R}
+mod_cases_nb <- glm.nb(
+  formula = cases_7d ~ vaccinated_capped + ns(week_index, df = 4),
+  data    = weekly_data
+)
+
+summary(mod_cases_nb)
+exp(coef(mod_cases_nb)["vaccinated_capped"])
+
+```
+### Interpretation:
+
+The IRR (Incidence Rate Ratio) of about 0.9909 means that each 1% increase in vaccination coverage is associated with ~0.9% decrease in the weekly cases count.
+
+However, p = 0.5985 suggests this effect is not statistically significant; we do not have strong evidence that higher vaccination coverage reduced weekly cases in a clear, detectable way given this model specification.
+
+Possible reasons for non-significance:
+
+Confounding or overshadowing by new variants or changes in behavior (e.g., Omicron wave).
+
+Time-lag in the effect of vaccination on infection might be more than 0 weeks (it could be 2–4 weeks before coverage changes reduce new infections).
+
+Testing strategies or seasonal factors that aren’t fully accounted for in the spline.
+
+
+
+## Model B: Effect of Vaccination Coverage on Weekly Deaths
+
+
+```{R}
+mod_deaths_nb <- glm.nb(
+  formula = deaths_7d ~ vaccinated_capped + ns(week_index, df = 4),
+  data    = weekly_data
+)
+summary(mod_deaths_nb)
+
+# Interpret IRR for coverage:
+exp(coef(mod_deaths_nb)["vaccinated_capped"])
+
+```
+### Interpretation:
+
+IRR of 0.9812 means each 1% increase in vaccination coverage is associated with about a 1.9% decrease in weekly deaths, on average.
+
+p = 0.225 indicates this also is not statistically significant at conventional levels.
+
+Possible reasons for non-significance:
+
+Lag between cases and deaths might be longer (2+ weeks). If you don’t incorporate that, the model may miss the true timing of vaccination’s protective effect on mortality.
+
+Omicron or Delta waves that can cause large spikes in deaths that overshadow the steady effect of vaccination coverage.
+
+Age structure of who’s vaccinated. If younger groups get vaccinated first, the immediate effect on mortality may not be as large as vaccinating older, high-risk groups (which might have happened earlier in the timeline).
+
+
+## Model C: Effect on the Case-Fatality Rate (CFR)
+
+### 1. Directly Using a Binomial Approach
+
+```{R}
+# Make sure weeks with zero cases won't break the model.
+# Filter them or handle them carefully (deaths can't exceed cases).
+weekly_data2 <- weekly_data %>% filter(cases_7d > 0)
+
+mod_cfr_binom <- glm(
+  cbind(deaths_7d, cases_7d - deaths_7d) ~ vaccinated_capped + ns(week_index, df = 4),
+  family = binomial(link = "logit"),
+  data   = weekly_data2
+)
+
+summary(mod_cfr_binom)
+
+exp(coef(mod_cfr_binom)["vaccinated_capped"])
+
+```
+### Interpretation:
+
+Each 1% increase in coverage corresponds to a 2.2% reduction in the odds of death among reported cases (CFR). This result is highly significant (p < 0.000001).
+
+Over a 10-point increase in coverage, the odds ratio would be 0.9783^10 ≈ 0.80, indicating a ~20% reduction in odds of death given infection, holding time constant via the spline.
+
+**Why is this significant when the others are not?**
+
+Vaccines may do more to reduce severity (mortality) than infections, especially in an environment with new variants and partial immune escape. Even if they don’t fully prevent infection, they often reduce severe outcomes.
+
+No time lag in this CFR calculation lumps same-week deaths with same-week cases, which can artificially strengthen the relationship if in reality death typically follows infection by some days or weeks. But it may be that weekly data is aggregated in such a way that the mismatch is not as large as it would be in daily data.
+
+
+
+2. Using a Lag Between Cases & Deaths for CFR
+```{R}
+weekly_data2 <- weekly_data2 %>%
+  mutate(deaths_7d_lag2 = dplyr::lag(deaths_7d, n = 2))
+
+# Then define a new binomial outcome:
+mod_cfr_binom_lag2 <- glm(
+  cbind(deaths_7d_lag2, cases_7d - deaths_7d_lag2) ~ vaccinated_capped + ns(week_index, df = 4),
+  family = binomial(link = "logit"),
+  data   = weekly_data2
+)
+summary(mod_cfr_binom_lag2)
+
+
+```
+### Interpretation:
+
+Now, each 1% increase in coverage is associated with only a ~0.4% reduction in the odds of death (among cases 2 weeks prior), which is not statistically significant (p = 0.366).
+
+
+# Overall Synthesis
+
+**Cases & Deaths (NB Models):**
+
+The coefficients are negative (suggesting coverage might reduce cases/deaths), but they are not statistically significant. This could imply that other factors (new variants, behavior changes, etc.) overshadowed vaccination’s direct impact on raw counts in this time window or that the chosen specification (no lags, minimal covariates) doesn’t fully capture the vaccine’s effect.
+
+**CFR Without Lag:**
+
+Shows a clear, statistically significant negative association between coverage and the probability of dying given infection. This strongly suggests that vaccines played a role in reducing mortality among detected cases.
+
+**CFR With 2-Week Lag:**
+
+The effect diminishes and is no longer significant, highlighting the sensitivity of CFR modeling to how you handle the lag between infection (cases) and death.
+
+
+# Model Improvement
+
+## Omicron 
+
+### 1st method
+- Include a Binary indicator: e.g. omicron_period = 1 during Omicron-dominant weeks, 0 otherwise.
+```{R}
+weekly_data1 <- weekly_data %>%
+  mutate(omicron_period = ifelse(date >= as.Date("2021-12-15"), 1, 0))
+
+mod_cases_nb1 <- glm.nb(
+  cases_7d ~ vaccinated_capped + omicron_period + ns(week_index, df = 4),
+  data = weekly_data1
+)
+
+summary(mod_cases_nb1)
+```
+- The Omicron wave (omicron_period = 1) corresponds to a large, statistically significant jump in cases (~3.5×).
+
+- While the vaccination coefficient is negative (suggesting fewer cases with higher coverage), it’s not statistically significant here. A likely explanation is that Omicron’s higher transmissibility overshadowed the vaccine’s impact on infection risk—or that you might need lags or other covariates to better capture the vaccine’s effect on cases.
+
+```{R}
+mod_deaths_nb1 <- glm.nb(
+  formula = deaths_7d ~ vaccinated_capped + omicron_period + ns(week_index, df = 4),data    = weekly_data1
+)
+summary(mod_deaths_nb1)
+
+```
+- The Omicron wave is again associated with a substantial (3.2×) and significant jump in weekly deaths.
+
+- Vaccination coverage, in contrast to the cases model, shows a statistically significant(at 0.01 level) negative association with deaths. That is, higher coverage did correlate with fewer deaths, on average, even when controlling for the large Omicron effect and an overall time trend.
+
+### 2nd method
+**Weighted Negative Binomial**
+```{R}
+# 50% weight for Omicron period, full weight otherwise.
+weekly_data_weighted <- weekly_data %>%
+  mutate(omicron_period = ifelse(date >= as.Date("2021-12-15"), 1, 0),
+         my_weights = ifelse(omicron_period == 1, 0.5, 1.0))
+
+
+mod_cases_nb_weighted <- glm.nb(
+  formula = cases_7d ~ vaccinated_capped + ns(week_index, df = 4),
+  data = weekly_data_weighted,
+  weights = my_weights
+)
+
+summary(mod_cases_nb_weighted)
+
+mod_deaths_nb_weighted <- glm.nb(
+  formula = deaths_7d ~ vaccinated_capped + ns(week_index, df = 4),
+  data = weekly_data_weighted,
+  weights = my_weights
+)
+
+summary(mod_deaths_nb_weighted)
+
+```
+- not particularly useful
+
+
+**Robust” Negative Binomial: Using Robust Standard Errors**
+
+```{R}
+
+mod_cases_nb <- glm.nb(
+  formula = cases_7d ~ vaccinated_capped + ns(week_index, df = 4),
+  data = weekly_data
+)
+summary(mod_cases_nb)
+
+
+# Compute a robust variance-covariance matrix ("HC0" or "HC1", etc.)
+robust_vcov <- vcovHC(mod_cases_nb, type = "HC0")
+
+# Use coeftest to get robust standard errors and p-values
+coeftest(mod_cases_nb, vcov = robust_vcov)
+
+
+```
+**not very useful**
+
+
+# Advanced Models (VAR)
+
+
+```{R}
+# Convert and order date
+weekly_data$date <- as.Date(weekly_data$date)
+weekly_data <- weekly_data[order(weekly_data$date), ]
+
+# Convert to zoo object
+zweekly <- zoo(weekly_data[, -which(names(weekly_data) == "date")], 
+               order.by = weekly_data$date)
+
+# Fit Distributed Lag Model (remove NA values if necessary)
+dlm_model <- dynlm(cases_7d ~ L(vaccinated, 0:3) + L(cases_7d, 1), data = na.omit(zweekly))
+summary(dlm_model)
+
+
+```
+```{R}
+# Load the vars package
+library(vars)
+
+# Prepare the dataset for VAR by selecting relevant columns
+# Make sure the data is ordered by date
+var_data <- weekly_data[order(as.Date(weekly_data$date)), 
+                          c("cases_7d", "deaths_7d", "vaccinated")]
+
+# Optionally, check for stationarity and transform/difference the series if needed
+# For simplicity, we assume here that the series are stationary or have been transformed.
+
+# Determine optimal lag length using criteria such as AIC or BIC
+lag_selection <- VARselect(var_data, lag.max = 4, type = "both")
+print(lag_selection$selection)
+
+```
+
+```{R}
+var_model_3 <- VAR(var_data, p = 3, type = "both")
+summary(var_model_3)
+```
+
+
+## Overall VAR System Diagnostics
+
+- **Sample Size:** 101 observations were used to estimate the model.
+- **Log Likelihood:** –1447.714; while not directly interpretable, this value is used in information criteria comparisons.
+- **Roots of the Characteristic Polynomial:**  
+  These values (0.9102, 0.7679, …, 0.417) indicate the dynamic stability of the system. For stability, all roots should lie inside the unit circle (i.e., be less than 1 in modulus). Here, since the largest root is 0.9102, the system appears to be stable.
+
+---
+
+## Equation-by-Equation Breakdown
+
+### 1. Equation for **cases_7d**
+
+The regression equation is:
+
+$$
+\text{cases_7d} = \beta_1 *\text{cases_7d.l1} + \beta_2 *\text{deaths_7d.l1} + \beta_3 *\text{vaccinated.l1} + \beta_4 *\text{cases_7d.l2} + \dots + \beta_{10} *\text{trend} + \text{error}
+$$
+
+**Key Points:**
+
+- **Lag 1:**
+  - **cases_7d.l1:** Coefficient = 1.7548, *t* = 17.073, ***p < 2e-16***  
+    A strong positive and highly significant effect—suggesting that last week’s 7-day case count is a major predictor of this week’s cases.
+  - **deaths_7d.l1:** Coefficient = –8.1602, *p* ≈ 0.7942  
+    Not statistically significant at conventional levels.
+  - **vaccinated.l1:** Coefficient = –111.3760, *p* ≈ 0.6899  
+    Also not significant.
+
+- **Lag 2:**
+  - **cases_7d.l2:** Coefficient = –1.2442, *t* = –6.986, ***p < 0.001***  
+    Significant and negative, indicating that the case count from two weeks ago is inversely related to current cases.
+  - **deaths_7d.l2:** Coefficient = 70.6936, *t* = 2.328, *p* = 0.0222  
+    Significant and positive, suggesting an increase in deaths two weeks ago is associated with an increase in current cases.
+  - **vaccinated.l2:** Coefficient = 368.5270, but not statistically significant (*p* = 0.2828).
+
+- **Lag 3:**
+  - **cases_7d.l3:** Coefficient = 0.2838, marginally significant (*p* ≈ 0.0592).
+  - **deaths_7d.l3:** Coefficient = –49.6067, *t* = –2.449, *p* = 0.0163  
+    Significant and negative, indicating that deaths three weeks ago have a negative association with current cases.
+  - **vaccinated.l3:** Coefficient = –231.8593, not statistically significant.
+
+- **Deterministic Terms:**
+  - **const (Intercept):** –893.3258, not significant.
+  - **trend:** –12.5509, not significant.
+
+- **Model Fit for this Equation:**
+  - **Residual standard error:** 2996 (on 90 degrees of freedom)
+  - **Multiple R-squared:** 0.9136  
+    This high R-squared indicates that about 91% of the variability in **cases_7d** is explained by the model.
+  - **F-statistic:** 95.16 with a very small *p*-value, showing the overall regression is highly significant.
+
+**Interpretation:**  
+The dynamics of the **cases_7d** variable are dominated by its own past values (especially the lag 1 term) and, to a lesser extent, by the deaths variable at lags 2 and 3. The vaccination variable in this equation does not show statistically significant effects at any lag.
+
+---
+
+### 2. Equation for **deaths_7d**
+
+The regression equation is:
+
+$$
+\text{deaths_7d} = \text{(lag terms for cases_7d, deaths_7d, vaccinated)} + \text{const} + \text{trend} + \text{error}
+$$
+
+**Key Points:**
+
+- **Lag 1:**
+  - **cases_7d.l1:** Coefficient = 0.0010870, *t* = 3.377, **p = 0.001085**  
+    A very small but statistically significant positive effect.
+  - **deaths_7d.l1:** Coefficient = 0.5162152, *t* = 5.284, ***p < 8.73e-07***  
+    A robust, significant positive relationship.
+  - **vaccinated.l1:** Coefficient = –0.6128615, not significant.
+  
+- **Lag 2:**
+  - **cases_7d.l2:** Coefficient = 0.0024302, *t* = 4.357, ***p < 3.49e-05***  
+    Significant.
+  - **deaths_7d.l2:** Coefficient = 0.3402828, *t* = 3.577, ***p < 0.001***  
+    Significant.
+  - **vaccinated.l2:** Coefficient = 1.3142825, not significant.
+  
+- **Lag 3:**
+  - **cases_7d.l3:** Coefficient = –0.0021669, *t* = –4.658, ***p < 1.10e-05***  
+    Significant and negative.
+  - **deaths_7d.l3:** Coefficient = –0.1199624, marginally significant (*p* ≈ 0.0619).
+  - **vaccinated.l3:** Coefficient = –0.6894469, not significant.
+  
+- **Deterministic Terms:**
+  - **const:** –0.0257220, not significant.
+  - **trend:** 0.0117066, not significant.
+
+- **Model Fit for this Equation:**
+  - **Residual standard error:** 9.382  
+    Very small residual variance relative to the magnitude of deaths.
+  - **Multiple R-squared:** 0.9635  
+    The model explains about 96% of the variance in **deaths_7d**.
+  - **F-statistic:** 237.7, with an extremely small *p*-value, indicating high overall significance.
+
+**Interpretation:**  
+For **deaths_7d**, past values of both deaths and cases are significant predictors. Although the coefficients are small in magnitude, they are statistically significant, which shows that past case numbers and deaths carry predictive information for current deaths. The vaccination variable does not appear to have a statistically significant impact in this equation.
+
+---
+
+### 3. Equation for **vaccinated**
+
+The regression equation is:
+
+$$
+\text{vaccinated} = \text{(lag terms for cases_7d, deaths_7d, vaccinated)} + \text{const} + \text{trend} + \text{error}
+$$
+
+**Key Points:**
+
+- **Lag 1:**
+  - **vaccinated.l1:** Coefficient = 0.7667, *t* = 7.488, ***p < 4.57e-11***  
+    This is highly significant, suggesting that last week’s vaccination rate strongly predicts this week’s vaccination rate.
+  - **cases_7d.l1** and **deaths_7d.l1:** Not significant.
+  
+- **Lag 2:**
+  - **vaccinated.l2:** Coefficient = 0.3279, *t* = 2.612, *p* = 0.0106  
+    Significant, indicating some persistence.
+  - The lags for cases and deaths at lag 2 are not significant.
+  
+- **Lag 3:**
+  - **vaccinated.l3:** Coefficient = –0.1838, marginally significant (*p* = 0.0504)  
+    Suggesting a slight negative correction from three weeks ago.
+  - Again, the other lagged values for cases and deaths are not significant.
+  
+- **Deterministic Terms:**
+  - **const:** 8.001, highly significant (*t* = 5.867, ***p < 7.29e-08***).
+  - **trend:** 0.01363, significant (*t* = 1.991, *p* = 0.0495).
+
+- **Model Fit for this Equation:**
+  - **Residual standard error:** 1.103, very low.
+  - **Multiple R-squared:** 0.9959  
+    Nearly all the variation in the vaccination rate is explained by its own lags and the constant/trend.
+  - **F-statistic:** 2211, indicating an excellent overall fit.
+
+**Interpretation:**  
+The vaccination rate is highly persistent—its own lagged values (especially the lag 1 term) dominate its prediction. The constant and trend are also significant, implying an underlying upward or consistent baseline in the vaccination process. The lagged cases and deaths do not significantly affect the vaccination rate.
+
+---
+
+## Residual Covariance and Correlation
+
+- **Covariance Matrix:**
+
+  ```
+             cases_7d   deaths_7d   vaccinated
+  cases_7d    8973474    8600.889    384.996
+  deaths_7d      8601      88.027     -2.188
+  vaccinated      385      -2.188       1.216
+  ```
+
+  - **Interpretation:**  
+    The high variance in **cases_7d** (8,973,474) compared to **deaths_7d** and **vaccinated** is expected due to the scale differences in these variables. The covariances indicate the degree to which the residuals move together. For example, there is a modest positive covariance between **cases_7d** and **deaths_7d**.
+
+- **Correlation Matrix:**
+
+  ```
+             cases_7d   deaths_7d   vaccinated
+  cases_7d    1.0000      0.3060     0.1166
+  deaths_7d   0.3060      1.0000    -0.2115
+  vaccinated  0.1166     -0.2115     1.0000
+  ```
+
+  - **Interpretation:**  
+    Residuals from the **cases_7d** equation are moderately correlated (r = 0.306) with those from the **deaths_7d** equation, but the residuals for **vaccinated** are relatively uncorrelated with the other two. This suggests that after accounting for the dynamics in your VAR system, the unexplained portions of cases and deaths have some common variation, while vaccination’s shocks are largely distinct.
+
+---
+
+## Overall Summary
+
+- **Dynamics:**  
+  The VAR(3) model captures complex interdependencies:
+  - **cases_7d** is heavily influenced by its own past values, with significant negative effects from lag 2 and mixed effects from deaths at lags 2 and 3.
+  - **deaths_7d** is significantly predicted by its own past as well as past cases, but the magnitude of the coefficients is relatively small.
+  - **vaccinated** is very persistent over time, with strong dependence on its immediate past value, a slight influence from lag 2, and a marginal negative effect from lag 3.
+
+- **Deterministic Components:**  
+  The inclusion of both a constant and a trend in all equations has contributed significantly to the vaccination equation, reflecting a consistent baseline and growth (or pattern) in vaccination rates.
+
+- **Fit and Stability:**  
+  High R-squared values across the equations indicate a good fit. The system’s estimated eigenvalues (from the earlier output) confirm that the VAR is stable.
+
+- **Implications:**  
+  These results suggest that while the spread of cases and deaths has significant inertia (with current values largely depending on past values), the effect of vaccination on these outcomes is not directly significant within the VAR system—at least not in the short lags included here. Instead, vaccination is mainly driven by its own past performance.
+
+
+##VAR OF CFR
+
+```{R}
+weekly_data_cfr = weekly_data
+
+# Convert the date column and order the data
+weekly_data_cfr$date <- as.Date(weekly_data_cfr$date)
+weekly_data_cfr <- weekly_data_cfr[order(weekly_data_cfr$date), ]
+
+# Calculate CFR from weekly data (ensure division by zero is handled if needed)
+weekly_data_cfr$CFR <- with(weekly_data_cfr, deaths_7d / cases_7d)
+
+# Prepare the dataset for VAR with the two variables of interest: CFR and vaccinated
+var_data_cfr <- weekly_data_cfr[, c("CFR", "vaccinated")]
+
+
+# Determine the optimal lag length using criteria such as AIC, HQ, SC, and FPE.
+lag_selection_cfr <- VARselect(var_data_cfr, lag.max = 4, type = "both")
+print(lag_selection_cfr$selection)
+
+```
+
+```{R}
+# the optimal lag is 3
+var_model_cfr <- VAR(var_data_cfr, p = 3, type = "both")
+summary(var_model_cfr)
+```
+
+
+### Overall Model Information
+
+- **Endogenous Variables:** The model includes two variables: CFR and vaccinated.  
+- **Deterministic Variables:** Both a constant and a linear trend are included in each equation.  
+- **Sample Size:** The estimation uses 101 observations.  
+- **Log Likelihood:** 291.715 – this value is used when comparing models via information criteria.  
+- **Roots of the Characteristic Polynomial:**  
+  The roots (0.9091, 0.7188, 0.7188, 0.6122, 0.6122, 0.3751) are all less than 1 in absolute value, indicating that the system is dynamically stable.
+
+---
+
+### Equation 1: CFR Equation
+
+**Equation Structure:**  
+$$
+\text{CFR}_t = \beta_1 \text{CFR}_{t-1} + \beta_2 \text{vaccinated}_{t-1} + \beta_3 \text{CFR}_{t-2} + \beta_4 \text{vaccinated}_{t-2} + \beta_5 \text{CFR}_{t-3} + \beta_6 \text{vaccinated}_{t-3} + \text{const} + \text{trend} + \epsilon_t
+$$
+
+**Key Coefficient Insights:**
+
+- **Lagged CFR Terms:**  
+  - **CFR.l1:** Coefficient = 0.6452, *t* = 6.680, ***p < 1.73e-09***  
+    A strong and statistically significant effect, indicating that the CFR from the previous period is a key predictor of the current CFR.
+  - **CFR.l2:** Coefficient = 0.4386, *t* = 4.058, ***p < 0.000103***  
+    Also significant, suggesting persistence in the CFR over time.
+  - **CFR.l3:** Coefficient = –0.3142, *t* = –3.224, **p = 0.001745**  
+    A negative effect from the CFR three periods ago, implying a reversal or correction mechanism in the series.
+
+- **Lagged Vaccination Terms:**  
+  - **vaccinated.l1:** Coefficient = 3.436e-05, *p* = 0.904  
+    Virtually zero effect and not statistically significant.
+  - **vaccinated.l2:** Coefficient = 4.739e-04, *p* = 0.191  
+    Also not significant.
+  - **vaccinated.l3:** Coefficient = –4.767e-04, *t* = –1.841, *p* = 0.0688  
+    This term is marginally significant at the 10% level (but not at 5%), suggesting that a higher vaccination rate three periods ago might be associated with a slight reduction in the current CFR.  
+    _Interpretation:_ Although the direct short-term impact of vaccination on CFR isn’t strong in lags 1 and 2, there is a hint that after three periods (perhaps representing a delayed effect), increased vaccination might contribute to lowering the CFR.
+
+- **Deterministic Terms:**  
+  - **Constant:** –0.001364 (not significant)  
+  - **Trend:** –3.845e-07 (not significant)  
+
+**Model Fit:**  
+- **Residual Standard Error:** 0.003201  
+- **Multiple R-squared:** 0.6472 (Adjusted R-squared: 0.6206)  
+  About 65% of the variation in CFR is explained by the model.
+
+**Overall for CFR Equation:**  
+The CFR is mainly driven by its own past values. The vaccination rate does not show a strong immediate effect on CFR; however, the near-significance of the vaccination term at lag 3 suggests that any impact of vaccination on CFR might manifest with a delay.
+
+---
+
+### Equation 2: Vaccinated Equation
+
+**Equation Structure:**  
+$$
+\text{vaccinated}_t = \gamma_1 \text{CFR}_{t-1} + \gamma_2 \text{vaccinated}_{t-1} + \gamma_3 \text{CFR}_{t-2} + \gamma_4 \text{vaccinated}_{t-2} + \gamma_5 \text{CFR}_{t-3} + \gamma_6 \text{vaccinated}_{t-3} + \text{const} + \text{trend} + \epsilon_t
+$$
+
+**Key Coefficient Insights:**
+
+- **Lagged Vaccination Terms:**  
+  - **vaccinated.l1:** Coefficient = 0.79926, *t* = 8.115, ***p < 1.95e-12***  
+    A strong and highly significant effect, indicating a high persistence in vaccination rates.
+  - **vaccinated.l2:** Coefficient = 0.328825, *t* = 2.639, **p = 0.00976**  
+    Also significant, reinforcing the persistence.
+  - **vaccinated.l3:** Coefficient = –0.210856, *t* = –2.350, *p* = 0.02091  
+    A statistically significant negative effect from three periods ago, suggesting some mean-reverting behavior.
+
+- **Lagged CFR Terms:**  
+  - **CFR.l1, CFR.l2, CFR.l3:**  
+    Their coefficients are not statistically significant (p-values 0.796, 0.421, and 0.989, respectively).  
+    _Interpretation:_ Past values of CFR do not seem to influence the vaccination rate.
+
+- **Deterministic Terms:**  
+  - **Constant:** 7.963349, *t* = 6.000, ***p < 3.76e-08***  
+    Indicates a substantial baseline level in vaccination.
+  - **Trend:** 0.010722, which is not significant at conventional levels (p = 0.106).
+
+**Model Fit:**  
+- **Residual Standard Error:** 1.11  
+- **Multiple R-squared:** 0.9958 (Adjusted R-squared: 0.9954)  
+  The model explains almost all the variation in the vaccination rate, which is expected given its high persistence.
+
+**Overall for Vaccinated Equation:**  
+The vaccination rate is overwhelmingly driven by its own past values, with little to no influence from CFR. This makes sense conceptually, as vaccination programs tend to follow internal dynamics (logistics, policy, etc.) rather than being driven by short-term fluctuations in the fatality rate.
+
+---
+
+### Residual Covariance and Correlation
+
+- **Covariance Matrix:**  
+  - The variance of the CFR residuals is very small (1.025e-05) compared to that of the vaccinated residuals (1.2311582) due to scale differences.
+  - The off-diagonal elements indicate a very small negative covariance between the residuals (–0.0002944).
+
+- **Correlation Matrix:**  
+  - The correlation between the residuals of CFR and vaccinated is –0.08288, which is quite low.  
+    _Interpretation:_ After accounting for the lags and trends in the VAR, the unexplained parts of CFR and vaccination are almost uncorrelated, suggesting that the shocks in these equations are largely independent.
+
+---
+
+## Summary and Implications for Examining the Vaccination Effect on CFR
+
+- **Direct Impact on CFR:**  
+  The vaccination variables in the CFR equation (lags 1 and 2) are not statistically significant, while the lag 3 term is marginally significant and negative. This indicates that an increase in vaccination might reduce the CFR, but the effect appears with a delay—about three time periods later.  
+- **Dynamic Behavior:**  
+  The CFR is strongly autoregressive (driven by its own lags). This suggests that changes in CFR are highly persistent and that any vaccination effect might be subtle compared to the inherent inertia in fatality rates.
+- **Policy Insight:**  
+  Although the immediate short-term effects of vaccination on CFR are not evident in this VAR system, the borderline negative effect at lag 3 hints at a delayed benefit. It might be worthwhile to investigate further by extending the lag structure or exploring additional control variables (such as demographic or healthcare factors) that could mediate this relationship.
+  
+  
+```{R}
+
+#Plot impulse response functions to examine how shocks to vaccination affect CFR
+irf_vaccinated <- irf(var_model_cfr, impulse = "vaccinated", response = "CFR", n.ahead = 10, boot = TRUE)
+plot(irf_vaccinated)
+
+
+
+```
+
+- This IRF indicates that a shock to vaccination does not yield a strong, statistically significant change in CFR within the horizons shown. The effect oscillates slightly around zero and then settles back, with broad confidence intervals indicating substantial uncertainty.
