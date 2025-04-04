@@ -1,3 +1,6 @@
+#1. Cumulative Effect Models: Restricted to post-rollout data, these models predict log-transformed outcomes (cases, deaths, CFR) using time since rollout and a 2-week lagged vaccination rate to assess delayed vaccination effects.
+#2. Descriptive Comparisons: You split data into pre- and post-rollout periods, computed mean differences for outcomes, and applied t-tests to test for significant changes.
+#3. Interaction Regression: By including an interaction between time and a post-rollout indicator, you tested whether the trend in log weekly cases differs before and after the vaccine rollout.
 ########################################
 # 1) Load Libraries
 ########################################
