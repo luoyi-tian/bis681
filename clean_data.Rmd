@@ -6,6 +6,8 @@ library(lubridate)
 ```
 
 ```{r}
+
+setwd('/Users/chenlihui/Downloads/Yale/BIS 681/bis681')
 cases = read_csv("raw/cases.csv") 
 cases$date = mdy(cases$Date)
 cases = cases %>% 
@@ -29,59 +31,154 @@ vax = vax %>% group_by(date) %>%
 
 dat = left_join(cases, vax, by="date")
 write_csv(dat, "covid19_ct.csv")
+```
 
+### Visualization
+```{r}
 p1 = ggplot(dat, aes(x=date, y=cases)) + geom_line() + labs(title = "Daily Cases Over Time") + theme(
     plot.title = element_text(hjust = 0.5)  # 0.5 centers the title
   )
-ggsave(p1, filename="img/cases.png")
+# ggsave(p1, filename="img/cases.png")
 
 p2 = ggplot(dat, aes(x=date, y=deaths)) + geom_line() + labs(title = "Daily Deaths Over Time") + theme(
     plot.title = element_text(hjust = 0.5)  # 0.5 centers the title
   )
-ggsave(p2, filename="img/deaths.png")
+# ggsave(p2, filename="img/deaths.png")
 
 p3 = ggplot(dat, aes(x=date, y=vaccinated)) + geom_point() + ylim(0,NA) + 
   labs(title = "Percentage of Vaccinated Population Over Time") + theme(
     plot.title = element_text(hjust = 0.5)  # 0.5 centers the title
   )
-ggsave(p3, filename="img/vaccinated.png")
+# ggsave(p3, filename="img/vaccinated.png")
 
 ```
-
+### Weekly CFR
 ```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+
 weekly_cfr <- cases %>%
   # Floor each date to the beginning of its week (Monday start by default)
-  mutate(week = floor_date(date, unit = "week", week_start = 1)) %>%
-  group_by(week) %>%
+  mutate(monday_start = floor_date(date, unit = "week", week_start = 1)) %>%
+  group_by(monday_start) %>%
   summarise(
     total_cases  = sum(cases, na.rm = TRUE),
     total_deaths = sum(deaths, na.rm = TRUE)
   ) %>%
+  ungroup() %>%
   # Compute CFR; watch out for divisions by zero
-  mutate(cfr = ifelse(total_cases == 0, NA, total_deaths / total_cases))
+  mutate(cfr = ifelse(total_cases == 0, NA, total_deaths / total_cases)) 
+  
 
-p4 = ggplot(weekly_cfr, aes(x = week, y = cfr)) +
-  geom_line() +
-  geom_point() +
-  labs(
-    title = "Weekly Case-Fatality Ratio (CFR)",
-    x = "Week",
-    y = "CFR"
-  ) +
-  theme(
-    plot.title = element_text(hjust = 0.5)  # 0.5 centers the title
-  ) + 
-  # Optionally format y-axis as a percentage
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1))
 
-ggsave(p4, filename="img/weekly_cfr.png")
+# p4 = ggplot(weekly_cfr, aes(x = week, y = cfr)) +
+#   geom_line() +
+#   geom_point() +
+#   labs(
+#     title = "Weekly Case-Fatality Ratio (CFR)",
+#     x = "Week",
+#     y = "CFR"
+#   ) +
+#   theme(
+#     plot.title = element_text(hjust = 0.5)  # 0.5 centers the title
+#   ) + 
+#   # Optionally format y-axis as a percentage
+#   scale_y_continuous(labels = scales::percent_format(accuracy = 1))
+
+# ggsave(p4, filename="img/weekly_cfr.png")
 ```
+
+
+###
+```{r}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+
+weekly_dat <- dat %>%
+  # 1) Ensure 'date' is a proper Date and sort
+  mutate(date = ymd(date)) %>%
+  arrange(date) %>%
+  
+  # 2) Forward-fill 'vaccinated' so each day gets the last known coverage
+  fill(vaccinated, .direction = "down") %>%
+  
+  # 3) Define the Sunday for each date
+  #    wday(..., week_start=7) makes Sunday=1, Monday=2, ..., Saturday=7
+  #    so 'sunday_start' is the actual Sunday that begins that 7-day window
+  mutate(sunday_start = date - (wday(date, week_start = 7) - 1)) %>%
+  
+  # 4) Group by that Sunday-to-Saturday block
+  group_by(sunday_start) %>%
+  summarize(
+    total_cases  = sum(cases,  na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE),
+    # 5) Choose the last known vaccination rate in that block
+    weekly_coverage = last(vaccinated),
+    .groups = "drop"
+  ) %>%
+  
+  # 6) Compute weekly CFR
+  mutate(cfr = if_else(total_cases > 0, total_deaths / total_cases, NA_real_)) %>%
+  
+  replace_na(list(
+    weekly_coverage = 0,
+    cfr = 0
+  ))
+
+# Inspect the result
+head(weekly_dat)
+```
+
+
+### analysis
+```{r}
+library(dplyr)
+library(MASS)  # for glm.nb
+
+# Create a simple numeric time index (1,2,3,...) to account for general trends
+weekly_dat_mod <- weekly_dat %>%
+  arrange(sunday_start) %>%
+  mutate(week_index = row_number())
+
+weekly_dat_mod <- weekly_dat_mod %>%
+  mutate(weekly_coverage_lag1 = lag(weekly_coverage, 1))
+
+
+# Negative Binomial model for weekly cases
+mod_cases <- glm.nb(
+  total_cases ~ weekly_coverage_lag1 + week_index,
+  data = weekly_dat_mod
+)
+
+summary(mod_cases)
+
+mod_deaths <- glm.nb(
+  total_deaths ~ weekly_coverage_lag1 + week_index,
+  data = weekly_dat_mod
+)
+
+summary(mod_deaths)
+
+# Filter out weeks with 0 total_cases to avoid cbind(..., negative)
+weekly_cfr_data <- weekly_dat_mod %>%
+  filter(total_cases > 0)
+
+mod_cfr <- glm(
+  cbind(total_deaths, total_cases - total_deaths) ~ weekly_coverage_lag1 + week_index,
+  family = binomial(link = "logit"),
+  data = weekly_cfr_data
+)
+
+summary(mod_cfr)
+```
+
 
 ```{r}
-# my_code is new 
+confint(mod_cases)
 
 ```
-
 
 
 
