@@ -77,6 +77,11 @@ p4 = ggplot(weekly_cfr, aes(x = week, y = cfr)) +
 ggsave(p4, filename="img/weekly_cfr.png")
 ```
 
+```{r}
+# my_code is new 
+
+```
+
 
 
 
