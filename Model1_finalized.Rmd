@@ -1,0 +1,173 @@
+---
+title: "Intervention_Model"
+output: pdf_document
+date: "2025-04-04"
+---
+
+$$Y=\beta_0+\beta_1\times Week+\beta_2 \times Intervention+\beta_3\times Week \times Intervention+\epsilon$$
+```{r}
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(segmented)  # For breakpoints in time series
+library(broom)      
+```
+
+```{r}
+setwd("/Users/tianluoyi/Desktop/yale/25 Spring/Practice")
+
+ct_covid <- read_csv("covid19_ct.csv") %>%
+  mutate(date = as.Date(date))  # Ensure date is in Date format
+
+# Aggregate data by week
+ct_covid_weekly <- ct_covid %>%
+  mutate(week = floor_date(date, "week")) %>%
+  group_by(week) %>%
+  summarise(weekly_cases = sum(cases, na.rm = TRUE),
+            weekly_deaths = sum(deaths, na.rm = TRUE)) %>%
+  ungroup()
+
+# Compute the Case Fatality Ratio (CFR)
+ct_covid_weekly <- ct_covid_weekly %>%
+  mutate(cfr = weekly_deaths / weekly_cases)
+
+# Plot the CFR over time
+ggplot(ct_covid_weekly, aes(x = week, y = cfr)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red") +
+  labs(title = "Weekly Case Fatality Ratio (CFR) in Connecticut",
+       x = "Week",
+       y = "Case Fatality Ratio") +
+  theme_minimal()
+
+```
+
+
+```{r}
+ct_covid_weekly = ct_covid_weekly[4:108,]
+
+ct_covid_weekly <- ct_covid_weekly %>%
+  mutate(week_number = as.numeric(difftime(week, min(week), units = "weeks")))
+
+# Updated function with a 1-week lag
+prepare_phase <- function(data, start_date, next_start_date) {
+  data %>%
+    filter(week < next_start_date) %>%
+    mutate(
+      # Apply intervention one week later than the actual start
+      intervention = ifelse(week >= (start_date + 7), 1, 0)
+    )
+}
+
+# Redefine the phases list using the lagged intervention
+phases <- list(
+  Lockdown  = prepare_phase(ct_covid_weekly, as.Date("2020-03-23"), as.Date("2020-05-20")),
+  Reopen1   = prepare_phase(ct_covid_weekly, as.Date("2020-05-20"), as.Date("2020-06-17")),
+  Reopen2   = prepare_phase(ct_covid_weekly, as.Date("2020-06-17"), as.Date("2020-10-08")),
+  Reopen3   = prepare_phase(ct_covid_weekly, as.Date("2020-10-08"), as.Date("2020-11-06")),
+  Reversal2.1  = prepare_phase(ct_covid_weekly, as.Date("2020-11-06"), as.Date("2020-12-14"))
+)
+
+library(nlme)
+
+# ITS model fitting function
+fit_its_models <- function(data) {
+  list(
+    cases_model = gls(log(weekly_cases+1) ~ week_number + intervention + week_number * intervention,
+                      correlation = corAR1(form = ~ week_number), data = data),
+    deaths_model = gls(log(weekly_deaths+1) ~ week_number + intervention + week_number * intervention,
+                       correlation = corAR1(form = ~ week_number), data = data)
+  )
+}
+
+# Fit models with lagged intervention
+models <- lapply(phases, fit_its_models)
+
+# Summaries
+cases_summaries <- lapply(models, function(m) summary(m$cases_model))
+deaths_summaries <- lapply(models, function(m) summary(m$deaths_model))
+
+# Print results
+cases_summaries
+deaths_summaries
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(nlme)
+
+# Step 1: Extract coefficients + CIs for selected terms
+extract_ci_manual <- function(model, phase_name) {
+  coefs <- summary(model)$tTable
+  est <- coefs[c("intervention", "week_number:intervention"), "Value"]
+  se <- coefs[c("intervention", "week_number:intervention"), "Std.Error"]
+  term <- names(est)
+  lower <- est - 1.96 * se
+  upper <- est + 1.96 * se
+  data.frame(
+    Phase = phase_name,
+    Term = term,
+    Estimate = est,
+    Lower = lower,
+    Upper = upper
+  )
+}
+
+# Step 2: Apply to each phase and combine into a single data frame
+cases_coefs <- do.call(rbind, Map(function(m, phase) {
+  extract_ci_manual(m$cases_model, phase)
+}, models, names(models)))
+
+deaths_coefs <- do.call(rbind, Map(function(m, phase) {
+  extract_ci_manual(m$deaths_model, phase)
+}, models, names(models)))
+
+# Step 3: Plot
+ggplot(cases_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  labs(title = "Intervention Effects on Weekly Cases",
+       y = "Coefficient Estimate (95% CI)", x = "Phase") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(deaths_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  labs(title = "Intervention Effects on COVID-19 Weekly Deaths",
+       y = "Coefficient Estimate (95% CI)", x = "Phase") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+```{r}
+library(forecast)
+
+# Set up a plotting layout
+par(mfrow = c(2, 2))  
+
+# Function to plot ACF and PACF for model residuals
+plot_acf_pacf <- function(model, title_prefix) {
+  residuals <- residuals(model)
+  
+  acf(residuals, main = paste("ACF of", title_prefix, "Residuals"), lag.max = 30)
+  pacf(residuals, main = paste("PACF of", title_prefix, "Residuals"), lag.max = 30)
+}
+
+# Loop through all phases and plot ACF/PACF for both cases and deaths models
+for (phase in names(models)) {
+  plot_acf_pacf(models[[phase]]$cases_model, paste(phase, "Cases"))
+  plot_acf_pacf(models[[phase]]$deaths_model, paste(phase, "Deaths"))
+}
+
+# Reset plot layout
+par(mfrow = c(1, 1))
+```
+
+
