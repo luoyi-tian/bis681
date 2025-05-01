@@ -126,21 +126,44 @@ deaths_coefs <- do.call(rbind, Map(function(m, phase) {
 }, models, names(models)))
 
 # Step 3: Plot
-ggplot(cases_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
-  geom_point(position = position_dodge(width = 0.5), size = 1) +
-  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
-  labs(title = "Intervention Effects on Weekly Cases",
-       y = "Coefficient Estimate (95% CI)", x = "Phase") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+library(ggplot2)
 
-ggplot(deaths_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
-  geom_point(position = position_dodge(width = 0.5), size = 1) +
+# Custom theme with horizontal x-axis labels and border
+report_theme_horizontal_x <- theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),  # Horizontal text
+    legend.position = "top",
+    legend.title = element_blank(),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.8)  # Border box
+  )
+
+# Plot for Weekly Cases
+p_cases <- ggplot(cases_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
+  geom_point(position = position_dodge(width = 0.5), size = 1.5) +
   geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
-  labs(title = "Intervention Effects on COVID-19 Weekly Deaths",
-       y = "Coefficient Estimate (95% CI)", x = "Phase") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  labs(
+    title = "Intervention Effects on Weekly Cases",
+    y = "Coefficient Estimate (95% CI)",
+    x = "Phase"
+  ) +
+  report_theme_horizontal_x
+
+# Plot for Weekly Deaths
+p_deaths <- ggplot(deaths_coefs, aes(x = Phase, y = Estimate, ymin = Lower, ymax = Upper, color = Term)) +
+  geom_point(position = position_dodge(width = 0.5), size = 1.5) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  labs(
+    title = "Intervention Effects on COVID-19 Weekly Deaths",
+    y = "Coefficient Estimate (95% CI)",
+    x = "Phase"
+  ) +
+  report_theme_horizontal_x
+
+# Display plots
+p_cases
+p_deaths
+
 
 ```
 
